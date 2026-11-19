@@ -139,6 +139,12 @@ static void make_stored_name(const char *src, char *dst, size_t dstlen)
       break;
     }
   }
+  if (!g_preserve) {
+    const char *slash = strrchr(p, '\\');
+    const char *fslash = strrchr(p, '/');
+    if (fslash && (!slash || fslash > slash)) slash = fslash;
+    if (slash) p = slash + 1;
+  }
   strncpy(dst, p, dstlen - 1);
   dst[dstlen - 1] = '\0';
 }
@@ -518,6 +524,7 @@ int main(int argc, char **argv)
           break;
         case 'O': g_overwrite = 1; break;
         case 'P':
+          if (arg[1] == 'p') { g_preserve = 1; break; }
           if (++i >= argc) { printf("-P option requires a parameter\n"); goto done; }
           slist_add(&g_strip, argv[i]);
           break;
