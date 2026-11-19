@@ -314,7 +314,7 @@ typedef struct {
 #define REP_BONUS 6             /* repeat offsets have the cheapest slots */
 #define FOOTER_PENALTY 0        /* extra cost of a length-tree footer */
 #define LAZY_LIMIT 64           /* only look ahead for short matches */
-#define MATCH_CHAIN 2048
+#define MATCH_CHAIN 8192
 #define MATCH_BONUS 0           /* accept a match unless it is clearly worse */
 
 static int m_head[HSIZE];
@@ -447,7 +447,7 @@ static int hist_append(const unsigned char *in, unsigned long n)
 static int matcher_insert(unsigned long p)
 {
   unsigned int h;
-  if (p + 2 >= g_base + g_hist_len) return 0;   /* need three bytes */
+  if (p + 2 >= g_base + g_hist_len) return 0;
   h = mhash(g_hist + (p - g_base));
   m_prev[p & m_mask] = m_head[h];
   m_head[h] = (int)p;
