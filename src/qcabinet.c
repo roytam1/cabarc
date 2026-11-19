@@ -18,6 +18,10 @@
 #include "lzxdec.h"
 
 #define tcompNONE_CAB 0
+/* Several 32 KB frames share one LZX block (and one set of Huffman trees),
+   amortising the tree cost over the whole group. */
+#define LZX_GROUP_FRAMES 8
+#define LZX_GROUP_BYTES  (QTM_FRAME_SIZE * LZX_GROUP_FRAMES)
 
 typedef struct { const unsigned char *buf; unsigned long len, pos; }
   LZX_INPUT_STRUCT;
@@ -71,9 +75,10 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
                unsigned short setID, unsigned int reserve, int comp_type)
 {
   unsigned char *filetab = NULL, *blocks = NULL, *image = NULL;
-  unsigned char *frame = NULL, *comp = NULL, *block = NULL;
+  unsigned char *frame = NULL, *comp = NULL, *block = NULL, *lzxgrp = NULL;
   unsigned long filelen = 0, filecap = 0;
-  unsigned long blen = 0, bcap = 0;
+  unsigned long blen = 0, bcap = 0, grp_len = 0;
+  LZX_SPLIT lzxsplits[LZX_GROUP_FRAMES + 2];
   unsigned long *fstart = NULL, *fcount = NULL, *fend = NULL;
   unsigned long coff_files, data_start, total;
   unsigned short ctype;
@@ -112,9 +117,10 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
     goto done;
 
   frame = (unsigned char *)malloc(QTM_FRAME_SIZE);
-  comp  = (unsigned char *)malloc(QTM_FRAME_SIZE + 10240);
-  block = (unsigned char *)malloc(8 + QTM_FRAME_SIZE + 10240);
-  if (!frame || !comp || !block)
+  comp  = (unsigned char *)malloc(LZX_GROUP_BYTES + 16384);
+  block = (unsigned char *)malloc(8 + QTM_FRAME_SIZE + 16384);
+  lzxgrp = (unsigned char *)malloc(LZX_GROUP_BYTES);
+  if (!frame || !comp || !block || !lzxgrp)
     goto done;
 
   /* ---- CFFILE table and per-file offsets within each folder ---- */
@@ -158,7 +164,7 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
     }
     while (p < files[i].size) {
       unsigned int chunk = (unsigned int)(files[i].size - p);
-      unsigned int cbytes;
+      unsigned int cbytes = 0;
       if (chunk > QTM_FRAME_SIZE)
         chunk = QTM_FRAME_SIZE;
       memcpy(frame, files[i].data + p, chunk);
@@ -170,13 +176,47 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
         cbytes = mszip_compress(frame, chunk, comp, QTM_FRAME_SIZE + 10240);
       }
       else if (comp_type == 3) {
+        int ns = 0, si;
+        unsigned long prev_off = 0, prev_unc = 0;
         /* one continuous LZX stream per folder, with tree lengths and
            repeat offsets carried from one block to the next */
         if (folder_first)
           lzx_enc_begin(window_bits);
-        cbytes = lzx_compress_frame(frame, chunk, comp,
-                                    QTM_FRAME_SIZE + 10240, folder_first);
+        memcpy(lzxgrp + grp_len, frame, chunk);
+        grp_len += chunk;
+        if (p + chunk < files[i].size && grp_len < LZX_GROUP_BYTES) {
+          p += chunk;
+          continue;
+        }
+        cbytes = lzx_compress_frames(lzxgrp, (unsigned int)grp_len, comp,
+                                     LZX_GROUP_BYTES + 16384, folder_first,
+                                     QTM_FRAME_SIZE, lzxsplits,
+                                     LZX_GROUP_FRAMES + 2, &ns);
+        if (cbytes == 0)
+          goto done;
+        for (si = 0; si < ns; si++) {
+          unsigned int cd, cu;
+          if (si > 0) {
+            prev_off = lzxsplits[si - 1].comp_off;
+            prev_unc = lzxsplits[si - 1].uncomp;
+          }
+          cd = (unsigned int)(lzxsplits[si].comp_off - prev_off);
+          cu = (unsigned int)(lzxsplits[si].uncomp - prev_unc);
+          if (cd == 0 || cd > 65535 || cu == 0 || cu > 65535)
+            goto done;
+          memset(block, 0, 8);
+          put16(block + 4, (unsigned short)cd);
+          put16(block + 6, (unsigned short)cu);
+          memcpy(block + 8, comp + prev_off, cd);
+          if (!buf_append(&blocks, &blen, &bcap, block, 8 + cd))
+            goto done;
+          if (curfolder >= 0 && curfolder < nfolders)
+            fcount[curfolder]++;
+        }
+        grp_len = 0;
         folder_first = 0;
+        p += chunk;
+        continue;
       }
       else {
         if (folder_first)
@@ -200,6 +240,8 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
       fend[curfolder] = blen;
     }
   }
+  if (comp_type == 3)
+    lzx_enc_end();
 
   coff_files = 36 + reserve + (unsigned long)nfolders * 8;
   data_start = coff_files + filelen;
@@ -252,12 +294,15 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
   ok = 1;
 
 done:
+  if (comp_type == 3)
+    lzx_enc_end();
   if (filetab) free(filetab);
   if (blocks) free(blocks);
   if (image) free(image);
   if (frame) free(frame);
   if (comp) free(comp);
   if (block) free(block);
+  if (lzxgrp) free(lzxgrp);
   if (fidxs) free(fidxs);
   if (fstart) free(fstart);
   if (fend) free(fend);

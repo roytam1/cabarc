@@ -41,12 +41,15 @@ instead of new, int instead of bool, plain structs), and the old C++ bridge
 * `N -m MSZIP` produces real dynamic-Huffman MSZIP data.  Original
   `CABARC.EXE` lists and extracts these cabinets correctly, including
   multi-block folders (history window shared across blocks).
-* `N -m LZX:<15..21>` works.  `src/lzxenc.c` implements real LZX verbatim
-  blocks (LZ77 position slots, R0/R1/R2 repeats, canonical Huffman trees
-  through the 20-symbol pre-tree).  Each frame is validated with the
-  in-process decoder and falls back to an uncompressed LZX block when the
-  compressed stream does not round-trip, so created cabinets are always
-  readable by both this tool and the original `CABARC.EXE`.
+* `N -m LZX:<15..21>` works at every window level.  `src/lzxenc.c` implements
+  real LZX verbatim blocks (LZ77 position slots, persistent R0/R1/R2 repeats,
+  frequency-based 20-symbol pre-tree with RLE of unchanged lengths, and
+  cost-aware match selection).  History is shared across all blocks of a
+  folder, so larger windows find matches in earlier CFDATA blocks.  Up to
+  eight 32 KB frames share one LZX block (one set of Huffman trees), with
+  word-aligned CFDATA split points; a validated uncompressed-block fallback
+  keeps every cabinet readable by both this tool and the original
+  `CABARC.EXE`.
 * `N -m QUANTUM` now produces real Quantum-compressed cabinets.  The
   encoder was ported from `paq/qpack.c` (the verified C89 reconstruction of
   the original DOS Quantum packer): carry-less arithmetic coding, the
@@ -59,10 +62,10 @@ instead of new, int instead of bool, plain structs), and the old C++ bridge
 
 ## Known limitations
 
-* The LZX verbatim-block encoder is complete but the validation still
-  rejects many frames, so `-m LZX:*` usually falls back to uncompressed
-  blocks and produces larger cabinets than the original tool (fully
-  compatible, but not yet competitive in size).
+* The LZX encoder uses greedy/lazy parsing rather than the original's
+  full cost-based parser, so sizes on varied data are typically 5–10% larger
+  than `CABARC.EXE` (streams are fully compatible).  No E8/x86 call
+  translation is performed (the LZX stream header bit is always 0).
 * Quantum matchfinder tie-breaking may differ from DIAMOND's in rare cases,
   so compressed sizes for other inputs may vary slightly (the streams are
   still valid).
