@@ -70,6 +70,40 @@ static int buf_append(unsigned char **buf, unsigned long *len,
   return 1;
 }
 
+/* Opcode-aware scan for real x86 call sites.  A stray 0xE8 byte in text or
+   random data must not turn on LZX E8 translation: the header then forces
+   the decoder to reinterpret every 0xE8 in the folder.  Instruction
+   boundaries are approximated with the same short patterns cabinet.dll
+   recognises (E8/E9 rel32, RIP-relative 48/4C 8B/8D and FF 15). */
+static int has_x86_call(const unsigned char *d, unsigned long n)
+{
+  unsigned long i = 0;
+  int calls = 0;
+  while (i + 5 < n) {
+    unsigned char b = d[i];
+    if (b == 0xE8) {
+      long rel = (long)(signed int)((unsigned long)d[i + 1] |
+                   ((unsigned long)d[i + 2] << 8) |
+                   ((unsigned long)d[i + 3] << 16) |
+                   ((unsigned long)d[i + 4] << 24));
+      long target = (long)i + rel;
+      if (target >= 0 && (unsigned long)target < n) calls++;
+      i += 5;
+      continue;
+    }
+    if (b == 0xE9) { i += 5; continue; }
+    if ((b == 0x48 || b == 0x4C) && i + 2 < n &&
+        (d[i + 1] == 0x8B || d[i + 1] == 0x8D) &&
+        (((d[i + 2] >> 3) & 7) == 0) && ((d[i + 2] & 7) == 5)) {
+      i += 6;
+      continue;
+    }
+    if (b == 0xFF && d[i + 1] == 0x15) { i += 6; continue; }
+    i++;
+  }
+  return calls > 0;
+}
+
 int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
                int nfolders, int window_bits, int level,
                unsigned short setID, unsigned int reserve, int comp_type)
@@ -165,7 +199,7 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
     {
       int use_e8 = 0;
       if (comp_type == 3 && files[i].size)
-        use_e8 = memchr(files[i].data, 0xE8, (size_t)files[i].size) != NULL;
+        use_e8 = has_x86_call(files[i].data, files[i].size);
       while (p < files[i].size) {
       unsigned int chunk = (unsigned int)(files[i].size - p);
       unsigned int cbytes = 0;

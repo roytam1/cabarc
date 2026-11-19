@@ -396,9 +396,10 @@ unsigned int lzx_translate_e8(unsigned char *buf, unsigned long n,
 {
   unsigned long i, limit, count = 0;
   long F, P;
-  if (!filesize || n < 15) return 0;
+  /* cabinet.dll's encoder/decoder use a sentinel six bytes from the end */
+  if (!filesize || n <= 6) return 0;
   F = (long)filesize;
-  limit = n - 10;
+  limit = n - 6;
   for (i = 0; i < limit; ) {
     long rel, t, s;
     if (buf[i] != 0xE8) { i++; continue; }

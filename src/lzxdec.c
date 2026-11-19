@@ -399,13 +399,13 @@ void LzxDestroy( LzxDecoder* d )
 static void lzxIntelUntranslate( LzxDecoder *d, unsigned long frameSize )
 {
 	unsigned char* data = d->frameBuf;
-	unsigned char* dataend = d->frameBuf + frameSize - 10;
+	unsigned char* dataend = d->frameBuf + frameSize - 6;
 	signed int curpos = (signed int)d->offset;
 	signed int filesize = d->intelFilesize;
 	signed int absOff, relOff;
 
 	if( !d->intelStarted || !d->intelFilesize ) return;
-	if( d->frame>=32768 || frameSize<=10 ) return;
+	if( d->frame>=32768 || frameSize<=6 ) return;
 
 	while( data < dataend ) {
 		if( *data++ != 0xE8 ) { curpos++; continue; }

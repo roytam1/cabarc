@@ -50,9 +50,10 @@ instead of new, int instead of bool, plain structs), and the old C++ bridge
   shared across all blocks of a folder, so larger windows find matches in
   earlier CFDATA blocks.  Up to eight 32 KB frames share one LZX block
   (one set of Huffman trees), with word-aligned CFDATA split points.  x86
-  E8 call translation is enabled when the file contains 0xE8 bytes (the
-  stream header carries the file size), and the decoder honours it even
-  when every 0xE8 was consumed by a match.  Verbatim blocks are compared
+  E8 call translation is enabled when an opcode-aware scan finds a real
+  x86 call site (the stream header carries the file size), so stray 0xE8
+  bytes in text or random data do not pay for the header.  The decoder
+  honours it even when every 0xE8 was consumed by a match.  Verbatim blocks are compared
   against raw size and replaced with uncompressed LZX blocks when larger
   (also the Huffman failure fallback), keeping every cabinet readable by
   both this tool and the original `CABARC.EXE`.
