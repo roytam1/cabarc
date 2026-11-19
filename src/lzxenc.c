@@ -161,14 +161,30 @@ static int huffman_lengths(const unsigned long *freq, int n,
   return 1;
 }
 
-/* Write canonical codes for a tree: for each length, symbols in index order. */
-static void write_tree(BW *b, const unsigned char *lens, int first, int last)
+/* Previous block's tree lengths, kept per folder as the cabinet LZX
+   encoder does (WriteRepTree delta-codes against the previous tree). */
+static unsigned char g_prev_main[LZX_MAX_SYMS];
+static unsigned char g_prev_len[250];
+
+/* repeat offsets also carry across blocks of a folder */
+static unsigned int g_R0 = 1, g_R1 = 1, g_R2 = 1;
+
+void lzx_enc_begin(void)
 {
-  int n = last - first;
+  memset(g_prev_main, 0, sizeof(g_prev_main));
+  memset(g_prev_len, 0, sizeof(g_prev_len));
+  g_R0 = g_R1 = g_R2 = 1;
+}
+
+/* Write canonical codes for a tree: for each length, symbols in index order.
+   Delta values are relative to the previous block's tree lengths. */
+static void write_tree(BW *b, const unsigned char *lens,
+                       const unsigned char *prev_lens, int first, int last)
+{
   unsigned char pre[LZX_PRETREE];
   int counts[LZX_MAX_BITS + 1], firstcode[LZX_MAX_BITS + 2];
   int precode[LZX_PRETREE];
-  int i, len, x, prev = 0, code = 0;
+  int i, len, x, code = 0;
   unsigned int startpos;
 
   startpos = b->pos;
@@ -190,16 +206,16 @@ static void write_tree(BW *b, const unsigned char *lens, int first, int last)
   /* delta-code the real tree lengths through the pre-tree */
   for (x = first; x < last; x++) {
     int L = lens[x];
-    /* The decoder computes new_lens[x] = old_lens[x] - symbol (mod 17).
-       For a fresh block old_lens[x] is zero for every index. */
-    int sym = (17 - L) % 17;
+    /* decoder: new_lens[x] = old_lens[x] - symbol (mod 17) */
+    int sym = (prev_lens[x] - L + 17) % 17;
     int l = pre[sym];
     unsigned int c = (unsigned int)precode[sym];
     if (getenv("LZX_DEBUG") && x < first + 4)
       fprintf(stderr, "ENC delta x=%d L=%d sym=%d l=%d code=%u\n", x, L, sym, l, c);
     bw_bits(b, c, l);
   }
-  (void)prev;
+  /* this tree becomes the "previous" tree for the next block */
+  memcpy((void *)(prev_lens + first), lens + first, (size_t)(last - first));
   (void)startpos;
 }
 
@@ -299,7 +315,7 @@ unsigned int lzx_compress_frame(const unsigned char *in, unsigned int in_n,
   unsigned long *mainfreq, *lenfreq;
   unsigned char *mainlens, *lenlens;
   int ntok = 0, i, pos = 0, nslots;
-  unsigned int R0 = 1, R1 = 1, R2 = 1;
+  unsigned int R0 = g_R0, R1 = g_R1, R2 = g_R2;
   int maxsyms, ok = 1;
 
   make_bases();
@@ -388,11 +404,11 @@ unsigned int lzx_compress_frame(const unsigned char *in, unsigned int in_n,
   if (first_frame) bw_bit(&b, 0);
   bw_bits(&b, 1u, 3);               /* BLOCK_VERBATIM */
   bw_bits(&b, in_n, 24);
-  write_tree(&b, mainlens, 0, LZX_NUM_CHARS);
+  write_tree(&b, mainlens, g_prev_main, 0, LZX_NUM_CHARS);
   if (getenv("LZX_DEBUG")) fprintf(stderr, "ENC tree2 from %u\n", b.bytepos);
-  write_tree(&b, mainlens, LZX_NUM_CHARS, maxsyms);
+  write_tree(&b, mainlens, g_prev_main, LZX_NUM_CHARS, maxsyms);
   if (getenv("LZX_DEBUG")) fprintf(stderr, "ENC tree3 from %u\n", b.bytepos);
-  write_tree(&b, lenlens, 0, 249);
+  write_tree(&b, lenlens, g_prev_len, 0, 249);
   if (getenv("LZX_DEBUG")) fprintf(stderr, "ENC data from %u\n", b.bytepos);
 
   /* canonical codes for the main tree */
@@ -449,6 +465,7 @@ unsigned int lzx_compress_frame(const unsigned char *in, unsigned int in_n,
   bw_align_word(&b);
   {
     unsigned int ret = b.bytepos;
+    g_R0 = R0; g_R1 = R1; g_R2 = R2;
     free(tok); free(mainfreq); free(lenfreq); free(mainlens); free(lenlens);
     return ret;
   }

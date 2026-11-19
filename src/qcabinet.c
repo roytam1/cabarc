@@ -170,16 +170,12 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
         cbytes = mszip_compress(frame, chunk, comp, QTM_FRAME_SIZE + 10240);
       }
       else if (comp_type == 3) {
-        /* Multi-frame LZX streams do not yet interoperate with FDI; use
-           self-contained uncompressed blocks for larger files so every
-           cabinet stays readable.  Single-frame files get real LZX. */
-        if (files[i].size > QTM_FRAME_SIZE)
-          cbytes = lzx_write_uncompressed(frame, chunk, comp,
-                                          QTM_FRAME_SIZE + 10240,
-                                          folder_first);
-        else
-          cbytes = lzx_compress_frame(frame, chunk, comp,
-                                      QTM_FRAME_SIZE + 10240, 1);
+        /* one continuous LZX stream per folder, with tree lengths and
+           repeat offsets carried from one block to the next */
+        if (folder_first)
+          lzx_enc_begin();
+        cbytes = lzx_compress_frame(frame, chunk, comp,
+                                    QTM_FRAME_SIZE + 10240, folder_first);
         folder_first = 0;
       }
       else {
