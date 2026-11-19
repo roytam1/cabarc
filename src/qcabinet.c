@@ -162,12 +162,18 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
       if (curfolder >= 0 && curfolder < nfolders)
         fstart[curfolder] = blen;
     }
-    while (p < files[i].size) {
+    {
+      int use_e8 = 0;
+      if (comp_type == 3 && files[i].size)
+        use_e8 = memchr(files[i].data, 0xE8, (size_t)files[i].size) != NULL;
+      while (p < files[i].size) {
       unsigned int chunk = (unsigned int)(files[i].size - p);
       unsigned int cbytes = 0;
       if (chunk > QTM_FRAME_SIZE)
         chunk = QTM_FRAME_SIZE;
       memcpy(frame, files[i].data + p, chunk);
+      if (use_e8)
+        lzx_translate_e8(frame, chunk, p, files[i].size);
       if (comp_type == 0) {
         memcpy(comp, frame, chunk);
         cbytes = chunk;
@@ -181,7 +187,7 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
         /* one continuous LZX stream per folder, with tree lengths and
            repeat offsets carried from one block to the next */
         if (folder_first)
-          lzx_enc_begin(window_bits);
+          lzx_enc_begin(window_bits, use_e8 ? files[i].size : 0);
         memcpy(lzxgrp + grp_len, frame, chunk);
         grp_len += chunk;
         if (p + chunk < files[i].size && grp_len < LZX_GROUP_BYTES) {
@@ -235,6 +241,7 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
       if (curfolder >= 0 && curfolder < nfolders)
         fcount[curfolder]++;
       p += chunk;
+    }
     }
     if (curfolder >= 0 && curfolder < nfolders)
       fend[curfolder] = blen;

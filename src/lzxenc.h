@@ -23,8 +23,13 @@ unsigned int lzx_compress_frames(const unsigned char *in, unsigned int n,
                                  int first_frame, unsigned int frame_size,
                                  LZX_SPLIT *splits, int maxsplits,
                                  int *nsplits);
-/* start a folder; windowBits 15..21 selects the position-slot table */
-void lzx_enc_begin(int windowBits);
+/* start a folder; windowBits 15..21 selects the position-slot table.
+   e8FileSize != 0 enables x86 E8 call translation for this folder. */
+void lzx_enc_begin(int windowBits, unsigned long e8FileSize);
+/* Translate E8 call targets to absolute file offsets in one 32 KB frame.
+   The decoder undoes this; leave the last 10 bytes of the frame alone. */
+unsigned int lzx_translate_e8(unsigned char *buf, unsigned long n,
+                              unsigned long filepos, unsigned long filesize);
 /* release the folder window and matcher (safe to call more than once) */
 void lzx_enc_end(void);
 unsigned int lzx_write_uncompressed(const unsigned char *in, unsigned int n,

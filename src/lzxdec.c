@@ -561,6 +561,9 @@ static int lzxDecodeFrame( LzxDecoder *d, unsigned long frameSize )
 		} else {
 			d->intelFilesize = 0;
 		}
+		/* The stream header is authoritative: E8 bytes may all be part of
+		   matches, leaving no 0xE8 literal in the main tree. */
+		if( d->intelFilesize ) d->intelStarted = 1;
 		d->headerRead = 1;
 	}
 

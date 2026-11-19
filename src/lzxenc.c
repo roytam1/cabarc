@@ -193,6 +193,7 @@ static unsigned char g_prev_len[250];
 /* repeat offsets also carry across blocks of a folder */
 static unsigned int g_R0 = 1, g_R1 = 1, g_R2 = 1;
 static int g_nslots = 30;       /* position slots for the current window */
+static unsigned long g_e8filesize = 0;   /* 0 = no E8 translation */
 
 /* Write canonical codes for a tree: for each length, symbols in index order.
    Delta values are relative to the previous block's tree lengths.  The
@@ -308,7 +309,13 @@ typedef struct {
    length = 9 + footer at most).  Returning 258 made every maximal match
    fail the length check and fall back to a literal. */
 #define MAX_MATCH 257
-#define SCORE_BYTE 7            /* approximate bits saved per matched byte */
+#define SCORE_BYTE 3            /* large windows: favour cheap matches */
+#define SCORE_BYTE_SMALL 4      /* small windows: distant matches cost more */
+#define REP_BONUS 6             /* repeat offsets have the cheapest slots */
+#define FOOTER_PENALTY 0        /* extra cost of a length-tree footer */
+#define LAZY_LIMIT 64           /* only look ahead for short matches */
+#define MATCH_CHAIN 2048
+#define MATCH_BONUS 0           /* accept a match unless it is clearly worse */
 
 static int m_head[HSIZE];
 static int *m_prev;             /* chain link per absolute position & mask */
@@ -349,11 +356,12 @@ static int matcher_reset(unsigned int window, unsigned long cap)
   return m_prev != NULL && g_hist != NULL;
 }
 
-void lzx_enc_begin(int windowBits)
+void lzx_enc_begin(int windowBits, unsigned long e8FileSize)
 {
   unsigned int window;
   if (windowBits < 15 || windowBits > 21)
     windowBits = 15;
+  g_e8filesize = e8FileSize;
   g_nslots = slot_count[windowBits - 15];
   window = 1u << windowBits;
   memset(g_prev_main, 0, sizeof(g_prev_main));
@@ -368,6 +376,52 @@ void lzx_enc_end(void)
   if (g_hist) { free(g_hist); g_hist = NULL; }
   g_hist_cap = g_hist_len = g_base = g_ins = 0;
   g_W = 0;
+  g_e8filesize = 0;
+}
+
+/* One-time LZX stream header: bit 1 followed by the file size enables x86
+   E8 call translation, which the decoder reverses. */
+static void bw_stream_header(BW *b)
+{
+  if (!g_e8filesize) { bw_bit(b, 0); return; }
+  bw_bit(b, 1);
+  bw_bits(b, (unsigned int)((g_e8filesize >> 16) & 0xFFFF), 16);
+  bw_bits(b, (unsigned int)(g_e8filesize & 0xFFFF), 16);
+}
+
+/* Inverse of lzxIntelUntranslate(): write the absolute target of each E8
+   call so repeated calls to the same address encode identically. */
+unsigned int lzx_translate_e8(unsigned char *buf, unsigned long n,
+                              unsigned long filepos, unsigned long filesize)
+{
+  unsigned long i, limit, count = 0;
+  long F, P;
+  if (!filesize || n < 15) return 0;
+  F = (long)filesize;
+  limit = n - 10;
+  for (i = 0; i < limit; ) {
+    long rel, t, s;
+    if (buf[i] != 0xE8) { i++; continue; }
+    rel = (long)(signed int)((unsigned long)buf[i + 1] |
+                             ((unsigned long)buf[i + 2] << 8) |
+                             ((unsigned long)buf[i + 3] << 16) |
+                             ((unsigned long)buf[i + 4] << 24));
+    P = (long)(filepos + i);
+    t = rel + P;
+    if (t >= 0 && t < F)
+      s = t;                  /* decoder: s - P = rel */
+    else if (t >= F && t - F < P)
+      s = rel - F;            /* decoder: s + F = rel */
+    else
+      s = rel;                /* decoder leaves it alone */
+    buf[i + 1] = (unsigned char)s;
+    buf[i + 2] = (unsigned char)(s >> 8);
+    buf[i + 3] = (unsigned char)(s >> 16);
+    buf[i + 4] = (unsigned char)(s >> 24);
+    count++;
+    i += 5;
+  }
+  return (unsigned int)count;
 }
 
 /* Append a frame to the history window, dropping the oldest bytes when
@@ -438,8 +492,10 @@ static int find_match(unsigned long pos, unsigned long fend, int maxchain,
       /* Prefer the match that saves the most literal bits after paying
          for its distance, and give repeat offsets a small bonus because
          their slot codes are the most frequent. */
-      score = (int)l * SCORE_BYTE - dist_bits(d);
-      if (d == R0 || d == R1 || d == R2) score += 3;
+      score = (int)l * (g_nslots >= 34 ? SCORE_BYTE : SCORE_BYTE_SMALL)
+              + MATCH_BONUS - dist_bits(d);
+      if (l >= 9) score -= FOOTER_PENALTY;
+      if (d == R0 || d == R1 || d == R2) score += REP_BONUS;
       if (score > bestscore) {
         bestscore = score; best = (int)l; boff = (int)d;
         if (l >= maxl) break;
@@ -460,7 +516,7 @@ unsigned int lzx_write_uncompressed(const unsigned char *in, unsigned int n,
   BW b;
   unsigned int k;
   bw_init(&b, out, cap);
-  if (first_frame) bw_bit(&b, 0);
+  if (first_frame) bw_stream_header(&b);
   bw_bits(&b, 3u, 3);              /* BLOCK_UNCOMPRESSED */
   bw_bits(&b, n, 24);
   for (k = 0; k < 4; k++) bw_bits(&b, 0xAAu, 8);   /* R0 marker */
@@ -527,16 +583,16 @@ unsigned int lzx_compress_frames(const unsigned char *in, unsigned int in_n,
 
   while (pos < (int)in_n) {
     unsigned long P = fstart + (unsigned long)pos;
-    int off = 0, len = find_match(P, fend, 256, &off, R0, R1, R2);
+    int off = 0, len = find_match(P, fend, MATCH_CHAIN, &off, R0, R1, R2);
     LZTOK *t = &tok[ntok++];
 
     /* lazy matching: prefer a literal when the next position starts a
        clearly longer match */
-    if (len >= 3 && len < 64 && pos + 1 < (int)in_n) {
+    if (len >= 3 && len < LAZY_LIMIT && pos + 1 < (int)in_n) {
       int off1 = 0, len1;
       matcher_insert(P);
       g_ins = P + 1;
-      len1 = find_match(P + 1, fend, 256, &off1, R0, R1, R2);
+      len1 = find_match(P + 1, fend, MATCH_CHAIN, &off1, R0, R1, R2);
       if (len1 > len + 1) len = 0;
     }
 
@@ -630,7 +686,7 @@ unsigned int lzx_compress_frames(const unsigned char *in, unsigned int in_n,
   }
 
   bw_init(&b, out, cap);
-  if (first_frame) bw_bit(&b, 0);
+  if (first_frame) bw_stream_header(&b);
   bw_bits(&b, 1u, 3);               /* BLOCK_VERBATIM */
   bw_bits(&b, in_n, 24);
   write_tree(&b, mainlens, g_prev_main, 0, LZX_NUM_CHARS);

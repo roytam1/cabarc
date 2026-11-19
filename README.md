@@ -44,10 +44,13 @@ instead of new, int instead of bool, plain structs), and the old C++ bridge
 * `N -m LZX:<15..21>` works at every window level.  `src/lzxenc.c` implements
   real LZX verbatim blocks (LZ77 position slots, persistent R0/R1/R2 repeats,
   frequency-based 20-symbol pre-tree with RLE of unchanged lengths, and
-  cost-aware match selection).  History is shared across all blocks of a
-  folder, so larger windows find matches in earlier CFDATA blocks.  Up to
-  eight 32 KB frames share one LZX block (one set of Huffman trees), with
-  word-aligned CFDATA split points; a validated uncompressed-block fallback
+  cost-aware match selection with window-dependent weights).  History is
+  shared across all blocks of a folder, so larger windows find matches in
+  earlier CFDATA blocks.  Up to eight 32 KB frames share one LZX block
+  (one set of Huffman trees), with word-aligned CFDATA split points.  x86
+  E8 call translation is enabled when the file contains 0xE8 bytes (the
+  stream header carries the file size), and the decoder honours it even
+  when every 0xE8 was consumed by a match.  A validated uncompressed-block fallback
   keeps every cabinet readable by both this tool and the original
   `CABARC.EXE`.
 * `N -m QUANTUM` now produces real Quantum-compressed cabinets.  The
@@ -62,10 +65,11 @@ instead of new, int instead of bool, plain structs), and the old C++ bridge
 
 ## Known limitations
 
-* The LZX encoder uses greedy/lazy parsing rather than the original's
-  full cost-based parser, so sizes on varied data are typically 5–10% larger
-  than `CABARC.EXE` (streams are fully compatible).  No E8/x86 call
-  translation is performed (the LZX stream header bit is always 0).
+* The LZX encoder uses greedy/lazy parsing rather than the original's full
+  cost-based parser, so sizes on varied data are typically 0.5–5% larger
+  than `CABARC.EXE` on larger inputs (tiny files pay a fixed tree/header
+  overhead).  E8 translation is applied to every 0xE8 byte in the data area,
+  not only to genuine x86 call opcodes.
 * Quantum matchfinder tie-breaking may differ from DIAMOND's in rare cases,
   so compressed sizes for other inputs may vary slightly (the streams are
   still valid).
