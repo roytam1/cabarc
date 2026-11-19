@@ -253,17 +253,21 @@ int cablib_read(const char *path, CABLIB *cab, char *err, int errsz)
   coffFiles = rd32(image + p + 16);
   cFolders = rd16(image + p + 26);
   cFiles = rd16(image + p + 28);
-  flags = rd16(image + p + 30);
-  setID = rd16(image + p + 32);
-  iCab = rd16(image + p + 34);
+  /* cabinet.dll uses the setID bits as the reserve-field flags */
+  setID = rd16(image + p + 30);
+  flags = setID;
+  iCab = rd16(image + p + 32);
 
   if (flags & 0x0004) {
+    /* a 4-byte cbCFHeader count at 36, followed by that many reserved
+       bytes, then the CFFOLDER entries (same layout as FDI's LoginCabinet) */
     unsigned long q = p + 36;
-    /* the byte at 36 is the reserved-field presence byte (0x00) */
-    cbCFHeader = rd16(image + q + 1);
-    cbCFFolder = rd16(image + q + 3);
-    cbCFData = rd16(image + q + 5);
-    (void)cbCFHeader;
+    cbCFHeader = rd32(image + q);
+    if (cbCFHeader > 60000) goto done;
+    cbCFFolder = 0;
+    cbCFData = 0;
+    (void)cbCFFolder;
+    (void)cbCFData;
   }
 
   if (cFolders == 0 || cFiles == 0) goto done;
@@ -279,7 +283,7 @@ int cablib_read(const char *path, CABLIB *cab, char *err, int errsz)
 
   /* CFFOLDER entries start at 36 (+ reserve header area). */
   {
-    unsigned long q = base + 36 + (flags & 0x0004 ? 7 + cbCFHeader : 0);
+    unsigned long q = base + 36 + (flags & 0x0004 ? 4 + cbCFHeader : 0);
     int k;
     for (k = 0; k < cFolders; k++) {
       unsigned short nb = rd16(folders + k * 8 + 4);
