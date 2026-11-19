@@ -50,9 +50,10 @@ instead of new, int instead of bool, plain structs), and the old C++ bridge
   (one set of Huffman trees), with word-aligned CFDATA split points.  x86
   E8 call translation is enabled when the file contains 0xE8 bytes (the
   stream header carries the file size), and the decoder honours it even
-  when every 0xE8 was consumed by a match.  A validated uncompressed-block fallback
-  keeps every cabinet readable by both this tool and the original
-  `CABARC.EXE`.
+  when every 0xE8 was consumed by a match.  Verbatim blocks are compared
+  against raw size and replaced with uncompressed LZX blocks when larger
+  (also the Huffman failure fallback), keeping every cabinet readable by
+  both this tool and the original `CABARC.EXE`.
 * `N -m QUANTUM` now produces real Quantum-compressed cabinets.  The
   encoder was ported from `paq/qpack.c` (the verified C89 reconstruction of
   the original DOS Quantum packer): carry-less arithmetic coding, the

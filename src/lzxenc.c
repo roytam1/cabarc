@@ -531,6 +531,38 @@ unsigned int lzx_write_uncompressed(const unsigned char *in, unsigned int n,
   return b.bytepos;
 }
 
+/* Emit one uncompressed block per nominal frame, with CFDATA splits at
+   each block end.  Used both as a Huffman fallback and when a verbatim
+   block would be larger than the raw data. */
+static unsigned int write_uncompressed_group(const unsigned char *in,
+                          unsigned int in_n, unsigned char *out,
+                          unsigned int cap, int first_frame,
+                          unsigned int frame_size, LZX_SPLIT *splits,
+                          int maxsplits, int *nsplits)
+{
+  unsigned long src = 0;
+  unsigned int dst = 0;
+  int f = first_frame, ns = 0;
+  while (src < in_n) {
+    unsigned int flen = in_n - (unsigned int)src;
+    unsigned int c;
+    if (flen > frame_size) flen = frame_size;
+    if (cap <= dst) return 0;
+    c = lzx_write_uncompressed(in + src, flen, out + dst, cap - dst, f);
+    if (!c) return 0;
+    dst += c; src += flen; f = 0;
+    if (ns < maxsplits) {
+      splits[ns].comp_off = dst;
+      splits[ns].uncomp = src;
+      ns++;
+    }
+  }
+  /* the decoder loads these from the uncompressed block header */
+  g_R0 = 0xAA; g_R1 = 0; g_R2 = 0;
+  *nsplits = ns;
+  return dst;
+}
+
 unsigned int lzx_compress_frames(const unsigned char *in, unsigned int in_n,
                                  unsigned char *out, unsigned int cap,
                                  int first_frame, unsigned int frame_size,
@@ -659,31 +691,20 @@ unsigned int lzx_compress_frames(const unsigned char *in, unsigned int in_n,
 
   if (!huffman_lengths(mainfreq, maxsyms, mainlens, LZX_MAX_BITS) ||
       !huffman_lengths(lenfreq, 250, lenlens, LZX_MAX_BITS)) {
-    /* fall back to one uncompressed block per nominal frame so every
-       CFDATA chunk stays within the 16-bit cbUncomp field */
-    unsigned long src = 0;
-    unsigned int dst = 0;
-    int f = first_frame;
-    while (src < in_n) {
-      unsigned int flen = in_n - (unsigned int)src;
-      unsigned int c;
-      if (flen > frame_size) flen = frame_size;
-      c = lzx_write_uncompressed(in + src, flen, out + dst, cap - dst, f);
-      if (!c) goto done;
-      dst += c; src += flen; f = 0;
-      if (nsplit < maxsplits) {
-        splits[nsplit].comp_off = dst;
-        splits[nsplit].uncomp = src;
-        nsplit++;
-        last_unc = src;
-      }
-    }
-    /* the decoder loads these from the uncompressed block header */
-    g_R0 = 0xAA; g_R1 = 0; g_R2 = 0;
-    *nsplits = nsplit;
+    unsigned int alt;
     free(tok); free(mainfreq); free(lenfreq); free(mainlens); free(lenlens);
-    return dst;
+    alt = write_uncompressed_group(in, in_n, out, cap, first_frame,
+                                   frame_size, splits, maxsplits, nsplits);
+    return alt;
   }
+
+  /* keep the trees the decoder actually knows, in case we decide to write
+     uncompressed blocks instead of this verbatim block */
+  {
+    unsigned char save_main[LZX_MAX_SYMS];
+    unsigned char save_len[250];
+    memcpy(save_main, g_prev_main, sizeof(save_main));
+    memcpy(save_len, g_prev_len, sizeof(save_len));
 
   bw_init(&b, out, cap);
   if (first_frame) bw_stream_header(&b);
@@ -783,9 +804,28 @@ unsigned int lzx_compress_frames(const unsigned char *in, unsigned int in_n,
   *nsplits = nsplit;
   {
     unsigned int ret = b.bytepos;
+    unsigned long frames = (unsigned long)(in_n + frame_size - 1) / frame_size;
+    unsigned int alt;
+    {
+      unsigned long thr = (unsigned long)in_n + 16UL * frames
+                          + (g_e8filesize ? 4UL : 0UL);
+      if (frames && ret >= thr) {
+      /* the original LZX encoder also picks an uncompressed block when the
+         verbatim estimate is no better than the raw bytes */
+      memcpy(g_prev_main, save_main, sizeof(save_main));
+      memcpy(g_prev_len, save_len, sizeof(save_len));
+      alt = write_uncompressed_group(in, in_n, out, cap, first_frame,
+                                     frame_size, splits, maxsplits, nsplits);
+      if (alt) {
+        free(tok); free(mainfreq); free(lenfreq); free(mainlens); free(lenlens);
+        return alt;
+      }
+      }
+    }
     g_R0 = R0; g_R1 = R1; g_R2 = R2;
     free(tok); free(mainfreq); free(lenfreq); free(mainlens); free(lenlens);
     return ret;
+  }
   }
 
 done:
