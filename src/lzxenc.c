@@ -168,9 +168,13 @@ static unsigned char g_prev_len[250];
 
 /* repeat offsets also carry across blocks of a folder */
 static unsigned int g_R0 = 1, g_R1 = 1, g_R2 = 1;
+static int g_nslots = 30;       /* position slots for the current window */
 
-void lzx_enc_begin(void)
+void lzx_enc_begin(int windowBits)
 {
+  if (windowBits < 15 || windowBits > 21)
+    windowBits = 15;
+  g_nslots = slot_count[windowBits - 15];
   memset(g_prev_main, 0, sizeof(g_prev_main));
   memset(g_prev_len, 0, sizeof(g_prev_len));
   g_R0 = g_R1 = g_R2 = 1;
@@ -319,7 +323,7 @@ unsigned int lzx_compress_frame(const unsigned char *in, unsigned int in_n,
   int maxsyms, ok = 1;
 
   make_bases();
-  nslots = slot_count[0];           /* window 32 KB */
+  nslots = g_nslots;                /* window size selected by lzx_enc_begin */
   maxsyms = LZX_NUM_CHARS + nslots * 8;
   if (maxsyms > LZX_MAX_SYMS) maxsyms = LZX_MAX_SYMS;
 

@@ -173,7 +173,7 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
         /* one continuous LZX stream per folder, with tree lengths and
            repeat offsets carried from one block to the next */
         if (folder_first)
-          lzx_enc_begin();
+          lzx_enc_begin(window_bits);
         cbytes = lzx_compress_frame(frame, chunk, comp,
                                     QTM_FRAME_SIZE + 10240, folder_first);
         folder_first = 0;

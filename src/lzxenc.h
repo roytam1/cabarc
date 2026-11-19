@@ -9,6 +9,8 @@ extern "C" {
 unsigned int lzx_compress_frame(const unsigned char *in, unsigned int n,
                                 unsigned char *out, unsigned int cap,
                                 int first_frame);
+/* start a folder; windowBits 15..21 selects the position-slot table */
+void lzx_enc_begin(int windowBits);
 unsigned int lzx_write_uncompressed(const unsigned char *in, unsigned int n,
                                     unsigned char *out, unsigned int cap,
                                     int first_frame);
