@@ -71,7 +71,6 @@ static int lzx_fill(void *ctx, unsigned char *buf, unsigned long want)
 }
 
 /* ------------------------------------------------------------ folder decode */
-
 /* ------------------------------------------------------------ folder decode */
 
 static int decode_folder(const unsigned char *base, unsigned long base_len,
@@ -87,7 +86,22 @@ static int decode_folder(const unsigned char *base, unsigned long base_len,
   unsigned int i;
   MsInflate z_mszip;
   int have_mszip = 0;
+  unsigned char *lzxbuf = NULL;
+  unsigned long lzxpos = 0, lzxtotal = 0;
   int ok = 0;
+
+  if (method == CABLIB_COMP_LZX) {
+    unsigned long p = coff;
+    for (i = 0; i < cblocks; i++) {
+      unsigned short cb;
+      if (p + 8 + cbReserveData > base_len) goto done;
+      cb = rd16(base + p + 4);
+      lzxtotal += cb;
+      p += 8 + cbReserveData + cb;
+    }
+    lzxbuf = (unsigned char *)malloc((size_t)lzxtotal + 1);
+    if (!lzxbuf) goto done;
+  }
 
   for (i = 0; i < cblocks; i++) {
     unsigned long p = srcpos;
@@ -126,23 +140,10 @@ static int decode_folder(const unsigned char *base, unsigned long base_len,
         if (!qtm_dec_frame(data, cb, out + dstpos, cu)) goto done;
         break;
       }
-      case CABLIB_COMP_LZX: {
-        LZX_INPUT input;
-        void *dec;
-        if (window_bits < 15 || window_bits > 21) goto done;
-        /* each LZX CFDATA block written by our tool is self-contained */
-        input.buf = data;
-        input.len = cb;
-        input.pos = 0;
-        dec = LzxCreate(window_bits, cu, lzx_fill, &input);
-        if (!dec) goto done;
-        if (!LzxDecode(dec, out + dstpos, cu)) {
-          LzxDestroy(dec);
-          goto done;
-        }
-        LzxDestroy(dec);
+      case CABLIB_COMP_LZX:
+        memcpy(lzxbuf + lzxpos, data, cb);
+        lzxpos += cb;
         break;
-      }
       default:
         if (err) sprintf(err, "unsupported compression type %d", method);
         goto done;
@@ -150,8 +151,26 @@ static int decode_folder(const unsigned char *base, unsigned long base_len,
     dstpos += cu;
     srcpos = p + 8 + cbReserveData + cb;
   }
+
+  if (method == CABLIB_COMP_LZX) {
+    LZX_INPUT input;
+    void *dec;
+    if (window_bits < 15 || window_bits > 21) goto done;
+    input.buf = lzxbuf;
+    input.len = lzxpos;
+    input.pos = 0;
+    dec = LzxCreate(window_bits, outlen, lzx_fill, &input);
+    if (!dec) goto done;
+    if (!LzxDecode(dec, out, outlen)) {
+      LzxDestroy(dec);
+      goto done;
+    }
+    LzxDestroy(dec);
+  }
+
   ok = (dstpos == outlen);
 done:
+  if (lzxbuf) free(lzxbuf);
   return ok;
 }
 

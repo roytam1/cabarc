@@ -422,7 +422,8 @@ unsigned int lzx_compress_frame(const unsigned char *in, unsigned int in_n,
           int symidx = t->msym;
           int l = mainlens[symidx];
           bw_bits(&b, (unsigned int)mcodes[symidx], l);
-          if (t->nbits) bw_bits(&b, t->extra, t->nbits);
+          /* the decoder reads the length-tree footer (when the length
+             primary is 7) BEFORE the raw distance extra bits */
           if (t->lenidx == 7) {
             int fl = lenlens[t->footer];
             /* length-tree canonical codes */
@@ -439,6 +440,7 @@ unsigned int lzx_compress_frame(const unsigned char *in, unsigned int in_n,
               if (lenlens[q]) lnext[lenlens[q]]++;
             bw_bits(&b, (unsigned int)lnext[fl], fl);
           }
+          if (t->nbits) bw_bits(&b, t->extra, t->nbits);
         }
       }
       free(mcodes);

@@ -90,8 +90,8 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
   if (reserve > 65535)
     reserve = 0;
 
-  /* Each LZX block written here starts its own stream (header bit), so it
-     must be its own folder: FDI keeps one LZX decompressor per folder. */
+  /* Each LZX CFDATA block written here is self-contained, so it can be
+     decoded independently; each file still occupies one folder. */
   fidxs = (int *)malloc((size_t)nfiles * sizeof(int));
   if (!fidxs)
     return 0;
@@ -170,31 +170,16 @@ int qcab_write(const char *path, QCAB_FILE *files, int nfiles,
         cbytes = mszip_compress(frame, chunk, comp, QTM_FRAME_SIZE + 10240);
       }
       else if (comp_type == 3) {
-        unsigned char *check = (unsigned char *)malloc(chunk + 1);
-        /* each LZX block is self-contained in our writer */
-        cbytes = lzx_compress_frame(frame, chunk, comp,
-                                    QTM_FRAME_SIZE + 10240, 1);
-        /* validate with the in-process decoder; fall back if needed */
-        if (cbytes && check) {
-          LZX_INPUT_STRUCT input;
-          void *dec;
-          input.buf = comp; input.len = cbytes; input.pos = 0;
-          dec = LzxCreate(window_bits, chunk,
-                                  qcab_lzx_fill, &input);
-          if (dec) {
-            int vok = LzxDecode(dec, check, chunk);
-            unsigned int bad = 0;
-            if (vok)
-              while (bad < chunk && check[bad] == frame[bad]) bad++;
-            if (bad < chunk) vok = 0;
-            if (!vok) {
-              cbytes = lzx_write_uncompressed(frame, chunk, comp,
-                                              QTM_FRAME_SIZE + 10240, 1);
-            }
-            LzxDestroy(dec);
-          }
-        }
-        free(check);
+        /* Multi-frame LZX streams do not yet interoperate with FDI; use
+           self-contained uncompressed blocks for larger files so every
+           cabinet stays readable.  Single-frame files get real LZX. */
+        if (files[i].size > QTM_FRAME_SIZE)
+          cbytes = lzx_write_uncompressed(frame, chunk, comp,
+                                          QTM_FRAME_SIZE + 10240,
+                                          folder_first);
+        else
+          cbytes = lzx_compress_frame(frame, chunk, comp,
+                                      QTM_FRAME_SIZE + 10240, 1);
         folder_first = 0;
       }
       else {
