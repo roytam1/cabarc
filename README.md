@@ -38,9 +38,11 @@ instead of new, int instead of bool, plain structs), and the old C++ bridge
 
 * `L` and `X` read cabinets produced by the original `CABARC.EXE` (MSZIP),
   by `DIAMOND.EXE` (Quantum), and LZX/NONE cabinets — data hashes match.
-* `N -m MSZIP` produces real dynamic-Huffman MSZIP data.  Original
-  `CABARC.EXE` lists and extracts these cabinets correctly, including
-  multi-block folders (history window shared across blocks).
+* `N -m MSZIP` produces real dynamic-Huffman MSZIP data, switching to a
+  stored DEFLATE block when the dynamic tree would make a frame larger
+  than its raw bytes.  Original `CABARC.EXE` lists and extracts these
+  cabinets correctly, including multi-block folders (history window
+  shared across blocks) and incompressible data.
 * `N -m LZX:<15..21>` works at every window level.  `src/lzxenc.c` implements
   real LZX verbatim blocks (LZ77 position slots, persistent R0/R1/R2 repeats,
   frequency-based 20-symbol pre-tree with RLE of unchanged lengths, and

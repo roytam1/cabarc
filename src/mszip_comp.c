@@ -401,7 +401,7 @@ unsigned int MsZipCompressFrame(const unsigned char *in, unsigned long n,
                                 unsigned char *out, unsigned long cap)
 {
     LzToken *tok = NULL;
-    unsigned long ntok = 0, i, pos = 0;
+    unsigned long ntok = 0, i, pos = 0, inoff = 0;
     int rc;
 
     if (n == 0 || n > C_MSZIP_BLOCK) return 0;
@@ -410,6 +410,7 @@ unsigned int MsZipCompressFrame(const unsigned char *in, unsigned long n,
 
     pos = 0;
     i = 0;
+    inoff = 0;
     while (i < ntok)
     {
         BitWriter bw;
@@ -420,12 +421,32 @@ unsigned int MsZipCompressFrame(const unsigned char *in, unsigned long n,
         {
             BwFree(&bw); free(tok); return 0;
         }
-        if (pos + 2 + bw.len > cap) { BwFree(&bw); free(tok); return 0; }
-        out[pos++] = 'C';
-        out[pos++] = 'K';
-        memcpy(out + pos, bw.buf, bw.len);
-        pos += bw.len;
+        /* A stored DEFLATE block costs 7 bytes of overhead; for
+           incompressible data the dynamic tree makes the block larger
+           than that, and cabinet.dll's MSZIP decoder rejects it. */
+        if (2UL + bw.len > 7UL + bytes) {
+            unsigned long j;
+            unsigned long len = bytes;
+            if (pos + 7 + len > cap) { BwFree(&bw); free(tok); return 0; }
+            out[pos++] = 'C';
+            out[pos++] = 'K';
+            out[pos++] = 0x01;                    /* BFINAL=1, BTYPE=00 */
+            out[pos++] = (unsigned char)(len & 0xFF);
+            out[pos++] = (unsigned char)((len >> 8) & 0xFF);
+            out[pos++] = (unsigned char)(~len & 0xFF);
+            out[pos++] = (unsigned char)((~len >> 8) & 0xFF);
+            memcpy(out + pos, in + inoff, (size_t)len);
+            pos += len;
+        }
+        else {
+            if (pos + 2 + bw.len > cap) { BwFree(&bw); free(tok); return 0; }
+            out[pos++] = 'C';
+            out[pos++] = 'K';
+            memcpy(out + pos, bw.buf, bw.len);
+            pos += bw.len;
+        }
         BwFree(&bw);
+        inoff += bytes;
     }
     free(tok);
     return pos;

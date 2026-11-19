@@ -253,13 +253,14 @@ static int msi_stored(MsInflate *z, FILE *out, unsigned long *written)
     /* skip to the next byte boundary */
     z->bitbuf = 0;
     z->bitcount = 0;
-    c = msi_bits(z, 8);
+    /* DEFLATE stored-block LEN/NLEN are little-endian */
     len = msi_bits(z, 8);
+    c = msi_bits(z, 8);
     if (c < 0 || len < 0)
         return -1;
     len |= (c << 8);
-    c = msi_bits(z, 8);
     nlen = msi_bits(z, 8);
+    c = msi_bits(z, 8);
     if (c < 0 || nlen < 0)
         return -1;
     nlen |= (c << 8);
