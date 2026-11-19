@@ -480,6 +480,30 @@ static int find_match(unsigned long pos, unsigned long fend, int maxchain,
     if (to_edge < maxl) maxl = to_edge;
   }
   if (pos + maxl > fend) maxl = fend - pos;
+  /* A repeat offset may be too deep in a hash chain, or the chain may be
+     truncated, so consider R0/R1/R2 explicitly as candidates. */
+#define TRY_REP(DD) do {                                                      \
+    unsigned long dd_ = (unsigned long)(DD);                                  \
+    if (dd_ > 0 && dd_ <= g_W && dd_ <= pos && pos - dd_ >= g_base) {          \
+      const unsigned char *a_ = g_hist + (pos - g_base);                      \
+      const unsigned char *b_ = g_hist + (pos - dd_ - g_base);                \
+      unsigned long l_ = 0;                                                   \
+      int sc_;                                                                \
+      while (l_ < maxl && a_[l_] == b_[l_]) l_++;                             \
+      if (l_ >= 3) {                                                          \
+        sc_ = (int)l_ * (g_nslots >= 34 ? SCORE_BYTE : SCORE_BYTE_SMALL)       \
+              + MATCH_BONUS + REP_BONUS - dist_bits(dd_);                     \
+        if (l_ >= 9) sc_ -= FOOTER_PENALTY;                                   \
+        if (sc_ > bestscore) {                                                \
+          bestscore = sc_; best = (int)l_; boff = (int)dd_;                   \
+        }                                                                     \
+      }                                                                       \
+    }                                                                         \
+  } while (0)
+  TRY_REP(R0);
+  TRY_REP(R1);
+  TRY_REP(R2);
+#undef TRY_REP
   for (chain = 0; cand >= 0 && chain < maxchain; chain++) {
     unsigned long d = pos - (unsigned long)cand;
     if ((long)d <= 0 || d > g_W) break;
