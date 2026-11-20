@@ -51,17 +51,16 @@ instead of new, int instead of bool, plain structs), and the old C++ bridge
   frequency-based 20-symbol pre-tree with RLE of unchanged lengths, and
   cost-aware match selection with window-dependent weights and a hash chain
   of up to 8192 candidates).  History is shared across all blocks of a
-  folder, so larger windows find matches in
-  earlier CFDATA blocks.  Up to eight 32 KB frames share one LZX block
+  folder, so larger windows find matches in earlier CFDATA blocks.  Up to
+  eight 32 KB frames share one LZX block
   (one set of Huffman trees), with word-aligned CFDATA split points.  x86
   E8 call translation is enabled when an opcode-aware scan finds a real
   x86 call site (the stream header carries the file size), so stray 0xE8
   bytes in text or random data do not pay for the header.  The decoder
   honours it even when every 0xE8 was consumed by a match.  Verbatim blocks
   are compared against raw size and replaced with uncompressed LZX blocks
-  when larger
-  (also the Huffman failure fallback), keeping every cabinet readable by
-  both this tool and the original `CABARC.EXE`.
+  when larger (also the Huffman failure fallback), keeping every cabinet
+  readable by both this tool and the original `CABARC.EXE`.
 * `N -m QUANTUM` now produces real Quantum-compressed cabinets.  The
   encoder was ported from `paq/qpack.c` (the verified C89 reconstruction of
   the original DOS Quantum packer): carry-less arithmetic coding, the
