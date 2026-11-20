@@ -125,21 +125,29 @@ typedef struct LzxDecoder
 // first byte of the file is the low byte of the word.  Getting that
 // wrong shifts the whole stream by eight bits and every block header
 // then reads as a type that does not exist.
+/* cabinet.dll initialises the bit buffer for each incoming CFDATA block:
+   leftover bits from the previous block are discarded. */
+static int lzx_refill( LzxDecoder *d )
+{
+	int got;
+	if( !d->fill ) return 0;
+	got = d->fill( d->fillCtx, d->inBuf, LZX_INPUT_MAX );
+	if( got<=0 ) { d->eof = 1; return 0; }
+	d->inLen = (unsigned long)got;
+	d->inPos = 0;
+	d->bitcnt = 0;
+	d->bitbuf = 0;
+	d->pendingValid = 0;
+	return 1;
+}
+
 static int lzxNeedBits( LzxDecoder *d, int n )
 {
 	while( d->bitcnt < n ) {
 		if( d->pendingValid ) {
 			// the byte that was left over needs its partner
 			if( d->inPos >= d->inLen ) {
-				int got;
-				if( d->eof ) return 0;
-				got = d->fill( d->fillCtx, d->inBuf, LZX_INPUT_MAX );
-				if( got<=0 ) {
-					d->eof = 1;
-					return 0;
-				}
-				d->inLen = (unsigned long)got;
-				d->inPos = 0;
+				if( d->eof || !lzx_refill( d ) ) return 0;
 			}
 			d->bitbuf = (d->bitbuf << 16) |
 						( ((unsigned int)d->inBuf[d->inPos]<<8) | d->pendingByte );
@@ -163,15 +171,7 @@ static int lzxNeedBits( LzxDecoder *d, int n )
 			continue;
 		}
 		{
-			int got;
-			if( d->eof ) return 0;
-			got = d->fill( d->fillCtx, d->inBuf, LZX_INPUT_MAX );
-			if( got<=0 ) {
-				d->eof = 1;
-				return 0;
-			}
-			d->inLen = (unsigned long)got;
-			d->inPos = 0;
+			if( d->eof || !lzx_refill( d ) ) return 0;
 		}
 	}
 	return 1;
@@ -221,12 +221,7 @@ static int lzxGetRawByte( LzxDecoder *d, unsigned int *out )
 		return 1;
 	}
 	if( d->inPos >= d->inLen ) {
-		int got;
-		if( d->eof ) return 0;
-		got = d->fill( d->fillCtx, d->inBuf, LZX_INPUT_MAX );
-		if( got<=0 ) { d->eof = 1; return 0; }
-		d->inLen = (unsigned long)got;
-		d->inPos = 0;
+		if( d->eof || !lzx_refill( d ) ) return 0;
 	}
 	*out = d->inBuf[d->inPos++];
 	return 1;
@@ -705,6 +700,22 @@ static int lzxDecodeFrame( LzxDecoder *d, unsigned long frameSize )
 	if( d->framePosn==d->windowSize ) d->framePosn = 0;
 
 	return 1;
+}
+
+/* Decode one CFDATA block: FDI hands the decoder exactly one payload at a
+   time and re-initialises the bit buffer for each. */
+int LzxDecodeBlock( LzxDecoder* d, unsigned char *out, unsigned long uncomp,
+					const unsigned char *in, unsigned long comp )
+{
+	if( !d || comp > LZX_INPUT_MAX ) return 0;
+	memcpy( d->inBuf, in, (size_t)comp );
+	d->inLen = comp;
+	d->inPos = 0;
+	d->bitcnt = 0;
+	d->bitbuf = 0;
+	d->pendingValid = 0;
+	d->eof = 0;
+	return LzxDecode( d, out, uncomp );
 }
 
 int LzxDecode( LzxDecoder* d, unsigned char *out, unsigned long len )

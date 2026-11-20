@@ -56,17 +56,21 @@ void cablib_free(CABLIB *cab)
 
 typedef struct {
   const unsigned char *buf;
-  unsigned long len, pos;
+  const unsigned long *offs, *lens;
+  unsigned long nblocks, idx;
 } LZX_INPUT;
 
+/* Deliver exactly one CFDATA payload per call, like FDI feeding LZX_Decode
+   one block at a time.  The decoder resets its bit buffer on refill. */
 static int lzx_fill(void *ctx, unsigned char *buf, unsigned long want)
 {
   LZX_INPUT *in = (LZX_INPUT *)ctx;
-  unsigned long n = in->len - in->pos;
-  if (n == 0) return 0;
+  unsigned long n;
+  if (in->idx >= in->nblocks) return 0;
+  n = in->lens[in->idx];
   if (n > want) n = want;
-  memcpy(buf, in->buf + in->pos, n);
-  in->pos += n;
+  memcpy(buf, in->buf + in->offs[in->idx], n);
+  in->idx++;
   return (int)n;
 }
 
@@ -86,12 +90,16 @@ static int decode_folder(const unsigned char *base, unsigned long base_len,
   unsigned int i;
   MsInflate z_mszip;
   int have_mszip = 0;
+  LzxDecoder *lzxd = NULL;
+  LZX_INPUT lzxinput;
   unsigned char *lzxbuf = NULL;
+  unsigned long *lzxoffs = NULL, *lzxlens = NULL;
   unsigned long lzxpos = 0, lzxtotal = 0;
   int ok = 0;
 
   if (method == CABLIB_COMP_LZX) {
     unsigned long p = coff;
+    if (window_bits < 15 || window_bits > 21) goto done;
     for (i = 0; i < cblocks; i++) {
       unsigned short cb;
       if (p + 8 + cbReserveData > base_len) goto done;
@@ -100,7 +108,16 @@ static int decode_folder(const unsigned char *base, unsigned long base_len,
       p += 8 + cbReserveData + cb;
     }
     lzxbuf = (unsigned char *)malloc((size_t)lzxtotal + 1);
-    if (!lzxbuf) goto done;
+    lzxoffs = (unsigned long *)malloc((size_t)cblocks * sizeof(unsigned long));
+    lzxlens = (unsigned long *)malloc((size_t)cblocks * sizeof(unsigned long));
+    if (!lzxbuf || !lzxoffs || !lzxlens) goto done;
+    lzxinput.buf = lzxbuf;
+    lzxinput.offs = lzxoffs;
+    lzxinput.lens = lzxlens;
+    lzxinput.nblocks = cblocks;
+    lzxinput.idx = 0;
+    lzxd = LzxCreate(window_bits, outlen, lzx_fill, &lzxinput);
+    if (!lzxd) goto done;
   }
 
   for (i = 0; i < cblocks; i++) {
@@ -142,7 +159,12 @@ static int decode_folder(const unsigned char *base, unsigned long base_len,
       }
       case CABLIB_COMP_LZX:
         memcpy(lzxbuf + lzxpos, data, cb);
+        lzxoffs[i] = lzxpos;
+        lzxlens[i] = cb;
         lzxpos += cb;
+        /* a refill inside this CFDATA must fetch the NEXT payload */
+        lzxinput.idx = i + 1;
+        if (!LzxDecodeBlock(lzxd, out + dstpos, cu, data, cb)) goto done;
         break;
       default:
         if (err) sprintf(err, "unsupported compression type %d", method);
@@ -152,25 +174,12 @@ static int decode_folder(const unsigned char *base, unsigned long base_len,
     srcpos = p + 8 + cbReserveData + cb;
   }
 
-  if (method == CABLIB_COMP_LZX) {
-    LZX_INPUT input;
-    void *dec;
-    if (window_bits < 15 || window_bits > 21) goto done;
-    input.buf = lzxbuf;
-    input.len = lzxpos;
-    input.pos = 0;
-    dec = LzxCreate(window_bits, outlen, lzx_fill, &input);
-    if (!dec) goto done;
-    if (!LzxDecode(dec, out, outlen)) {
-      LzxDestroy(dec);
-      goto done;
-    }
-    LzxDestroy(dec);
-  }
-
   ok = (dstpos == outlen);
 done:
+  if (lzxd) LzxDestroy(lzxd);
   if (lzxbuf) free(lzxbuf);
+  if (lzxoffs) free(lzxoffs);
+  if (lzxlens) free(lzxlens);
   return ok;
 }
 

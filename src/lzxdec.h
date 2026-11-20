@@ -21,6 +21,10 @@ LzxDecoder *LzxCreate(int windowBits, unsigned long totalLength,
                       LzxFillFn fill, void *fillCtx);
 void LzxDestroy(LzxDecoder *d);
 int LzxDecode(LzxDecoder *d, unsigned char *out, unsigned long len);
+/* Decode one CFDATA payload (cbData compressed bytes -> cbUncomp bytes),
+   resetting the bit buffer as FDI's LZX_Decode does. */
+int LzxDecodeBlock(LzxDecoder *d, unsigned char *out, unsigned long uncomp,
+                   const unsigned char *in, unsigned long comp);
 
 #ifdef __cplusplus
 }
