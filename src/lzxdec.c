@@ -125,53 +125,42 @@ typedef struct LzxDecoder
 // first byte of the file is the low byte of the word.  Getting that
 // wrong shifts the whole stream by eight bits and every block header
 // then reads as a type that does not exist.
-/* cabinet.dll initialises the bit buffer for each incoming CFDATA block:
-   leftover bits from the previous block are discarded. */
-static int lzx_refill( LzxDecoder *d )
+/* cabinet.dll's initialise_decoder_bitbuf(): preload two little-endian words
+   into the 32-bit bitbuf and set bitcnt to 16.  It is skipped while the
+   decoder is inside an uncompressed block. */
+static int lzx_init_bitbuf( LzxDecoder *d )
 {
-	int got;
-	if( !d->fill ) return 0;
-	got = d->fill( d->fillCtx, d->inBuf, LZX_INPUT_MAX );
-	if( got<=0 ) { d->eof = 1; return 0; }
-	d->inLen = (unsigned long)got;
-	d->inPos = 0;
-	d->bitcnt = 0;
-	d->bitbuf = 0;
-	d->pendingValid = 0;
+	if( d->blockType == LZX_BLOCK_UNCOMPRESSED ) return 1;
+	if( d->inPos + 4 > d->inLen ) return 0;
+	d->bitbuf = ((unsigned int)d->inBuf[d->inPos]   << 16) |
+	            ((unsigned int)d->inBuf[d->inPos+1] << 24) |
+	            ((unsigned int)d->inBuf[d->inPos+2])        |
+	            ((unsigned int)d->inBuf[d->inPos+3] << 8);
+	d->bitcnt = 16;
+	d->inPos += 4;
 	return 1;
 }
 
-static int lzxNeedBits( LzxDecoder *d, int n )
+/* cabinet.dll's fillbuf(): consume n bits, topping up with 16-bit words. */
+static int lzx_fillbuf( LzxDecoder *d, int n )
 {
-	while( d->bitcnt < n ) {
-		if( d->pendingValid ) {
-			// the byte that was left over needs its partner
-			if( d->inPos >= d->inLen ) {
-				if( d->eof || !lzx_refill( d ) ) return 0;
-			}
-			d->bitbuf = (d->bitbuf << 16) |
-						( ((unsigned int)d->inBuf[d->inPos]<<8) | d->pendingByte );
+	d->bitcnt -= n;
+	d->bitbuf <<= n;
+	if( d->bitcnt <= 0 ) {
+		unsigned int w;
+		int shift;
+		if( d->inPos + 1 >= d->inLen ) return 0;
+		w = (unsigned int)d->inBuf[d->inPos] |
+		    ((unsigned int)d->inBuf[d->inPos+1] << 8);
+		d->inPos += 2;
+		shift = -d->bitcnt;
+		d->bitbuf |= w << shift;
+		d->bitcnt += 16;
+		if( d->bitcnt <= 0 ) {
+			if( d->inPos >= d->inLen ) return 0;
+			d->bitbuf |= (unsigned int)d->inBuf[d->inPos] << (-d->bitcnt);
 			d->inPos++;
-			d->pendingValid = 0;
 			d->bitcnt += 16;
-			continue;
-		}
-		if( d->inPos+1 < d->inLen ) {
-			d->bitbuf = (d->bitbuf << 16) |
-						( ((unsigned int)d->inBuf[d->inPos+1]<<8) | d->inBuf[d->inPos] );
-			d->inPos += 2;
-			d->bitcnt += 16;
-			continue;
-		}
-		if( d->inPos < d->inLen ) {
-			// only one byte is left, so it waits for its partner
-			d->pendingByte = d->inBuf[d->inPos];
-			d->pendingValid = 1;
-			d->inPos++;
-			continue;
-		}
-		{
-			if( d->eof || !lzx_refill( d ) ) return 0;
 		}
 	}
 	return 1;
@@ -180,11 +169,9 @@ static int lzxNeedBits( LzxDecoder *d, int n )
 static int lzxGetBits( LzxDecoder *d, int n, unsigned int *out )
 {
 	if( n==0 ) { *out = 0; return 1; }
-	if( !lzxNeedBits( d, n ) ) return 0;
-	d->bitcnt -= n;
-	*out = ( d->bitbuf >> d->bitcnt ) & ((1u<<n)-1);
-	d->bitbuf &= (1u<<d->bitcnt)-1;
-	return 1;
+	if( n > 31 ) return 0;
+	*out = ( d->bitbuf >> (32-n) ) & ((1u<<n)-1);
+	return lzx_fillbuf( d, n );
 }
 
 static int lzxGetBit( LzxDecoder *d, unsigned int *out )
@@ -192,37 +179,18 @@ static int lzxGetBit( LzxDecoder *d, unsigned int *out )
 	return lzxGetBits( d, 1, out );
 }
 
-// Throw away the bits that are left, up to the next sixteen bit
-// boundary.  This is what the format asks for at the end of a frame.
+/* The stream is word-aligned at frame boundaries, so the fillbuf model has
+   nothing to discard here. */
 static void lzxAlign( LzxDecoder *d )
 {
-	if( d->bitcnt & 15 ) {
-		int drop = d->bitcnt & 15;
-		d->bitcnt -= drop;
-		d->bitbuf &= (1u<<d->bitcnt)-1;
-	}
+	(void)d;
 }
 
-// Read one raw byte in stream order.  Uncompressed LZX blocks store bytes
-// verbatim, not as 16-bit words, so they must NOT go through lzxGetBits():
-// that reads the high byte of each little-endian word first and therefore
-// swaps every adjacent pair.
+/* Uncompressed-block bytes come straight from the raw input pointer in
+   cabinet.dll, never through the bit buffer. */
 static int lzxGetRawByte( LzxDecoder *d, unsigned int *out )
 {
-	if( d->bitcnt >= 8 ) {
-		*out = (d->bitbuf >> (d->bitcnt - 8)) & 0xFFu;
-		d->bitcnt -= 8;
-		d->bitbuf &= (1u<<d->bitcnt)-1;
-		return 1;
-	}
-	if( d->pendingValid ) {
-		*out = d->pendingByte;
-		d->pendingValid = 0;
-		return 1;
-	}
-	if( d->inPos >= d->inLen ) {
-		if( d->eof || !lzx_refill( d ) ) return 0;
-	}
+	if( d->inPos >= d->inLen ) return 0;
 	*out = d->inBuf[d->inPos++];
 	return 1;
 }
@@ -298,11 +266,15 @@ static int lzxReadLengths( LzxDecoder *d, unsigned char *lens,
 	unsigned int x, y;
 	int z;
 
+
 	for( x=0; x<LZX_PRETREE_NUM; x++ ) {
 		if( !lzxGetBits( d, 4, &y ) ) return 0;
 		d->pretreeLens[x] = (unsigned char)y;
 	}
-	if( !lzxBuildTree( &d->pretree, d->pretreeLens, LZX_PRETREE_NUM ) ) return 0;
+	if( !lzxBuildTree( &d->pretree, d->pretreeLens, LZX_PRETREE_NUM ) ) {
+		
+		return 0;
+	}
 
 	for( x=first; x<last; ) {
 		z = lzxReadSymbol( d, &d->pretree );
@@ -438,6 +410,7 @@ static int lzxReadBlockHeader( LzxDecoder *d )
 	d->blockLength = blockLength;
 	d->blockRemaining = blockLength;
 
+
 	switch( d->blockType )
 	{
 	case LZX_BLOCK_ALIGNED:
@@ -482,9 +455,9 @@ static int lzxReadBlockHeader( LzxDecoder *d )
 	case LZX_BLOCK_UNCOMPRESSED:
 		// the data is stored as it is, so the bits are dropped
 		d->intelStarted = 1;
-		d->bitcnt = 0;
-		d->bitbuf = 0;
-		d->pendingValid = 0;
+		/* handle_beginning_of_uncompressed_block(): step back to the last
+		   word of the 27-bit header, then read the stored offsets raw */
+		if( d->inPos >= 2 ) d->inPos -= 2;
 		// and the three offsets that were used last are stored too
 		for( i=0; i<12; i++ ) {
 			unsigned int byte;
@@ -568,11 +541,15 @@ static int lzxDecodeFrame( LzxDecoder *d, unsigned long frameSize )
 		unsigned long thisRun;
 
 		if( d->blockRemaining==0 ) {
-			// a block that was stored as it is and had an odd
-			// length is followed by a byte that is dropped
-			if( (d->blockType==LZX_BLOCK_UNCOMPRESSED) && (d->blockLength & 1) ) {
-				unsigned int bit;
-				if( !lzxGetBit( d, &bit ) ) return 0;
+			/* decode_data(): after an uncompressed block, discard one
+			   byte for an odd length and re-initialise the bit buffer */
+			if( d->blockType==LZX_BLOCK_UNCOMPRESSED ) {
+				if( d->blockLength & 1 ) {
+					if( d->inPos >= d->inLen ) return 0;
+					d->inPos++;
+				}
+				d->blockType = 0;
+				if( !lzx_init_bitbuf( d ) ) return 0;
 			}
 			if( !lzxReadBlockHeader( d ) ) return 0;
 		}
@@ -717,6 +694,8 @@ int LzxDecodeBlock( LzxDecoder* d, unsigned char *out, unsigned long uncomp,
 	d->bitbuf = 0;
 	d->pendingValid = 0;
 	d->eof = 0;
+	/* LZX_Decode() calls initialise_decoder_bitbuf() on entry */
+	if( !lzx_init_bitbuf( d ) ) return 0;
 	return LzxDecode( d, out, uncomp );
 }
 
