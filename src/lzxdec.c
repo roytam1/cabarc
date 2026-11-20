@@ -707,9 +707,11 @@ static int lzxDecodeFrame( LzxDecoder *d, unsigned long frameSize )
 int LzxDecodeBlock( LzxDecoder* d, unsigned char *out, unsigned long uncomp,
 					const unsigned char *in, unsigned long comp )
 {
-	if( !d || comp > LZX_INPUT_MAX ) return 0;
+	if( !d || comp > LZX_INPUT_MAX - 4 ) return 0;
 	memcpy( d->inBuf, in, (size_t)comp );
-	d->inLen = comp;
+	/* FDI exposes four sentinel bytes past cbData (inputEnd = p + cb + 4) */
+	memset( d->inBuf + comp, 0, 4 );
+	d->inLen = comp + 4;
 	d->inPos = 0;
 	d->bitcnt = 0;
 	d->bitbuf = 0;
