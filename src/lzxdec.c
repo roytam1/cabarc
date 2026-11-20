@@ -149,7 +149,7 @@ static int lzx_fillbuf( LzxDecoder *d, int n )
 	if( d->bitcnt <= 0 ) {
 		unsigned int w;
 		int shift;
-		if( d->inPos + 1 >= d->inLen ) return 0;
+		if( d->inPos >= d->inLen ) return 0;
 		w = (unsigned int)d->inBuf[d->inPos] |
 		    ((unsigned int)d->inBuf[d->inPos+1] << 8);
 		d->inPos += 2;
@@ -179,11 +179,14 @@ static int lzxGetBit( LzxDecoder *d, unsigned int *out )
 	return lzxGetBits( d, 1, out );
 }
 
-/* The stream is word-aligned at frame boundaries, so the fillbuf model has
-   nothing to discard here. */
+/* LZX pads each 32 KB frame to a 16-bit boundary.  In the fillbuf model
+   bitcnt is the refill threshold, so bitcnt & 15 is the number of bits to
+   drop to get back in line. */
 static void lzxAlign( LzxDecoder *d )
 {
-	(void)d;
+	int drop = d->bitcnt & 15;
+	if( drop )
+		lzx_fillbuf( d, drop );
 }
 
 /* Uncompressed-block bytes come straight from the raw input pointer in
@@ -409,6 +412,7 @@ static int lzxReadBlockHeader( LzxDecoder *d )
 	d->blockType = (int)blockType;
 	d->blockLength = blockLength;
 	d->blockRemaining = blockLength;
+
 
 
 	switch( d->blockType )
@@ -685,6 +689,7 @@ int LzxDecodeBlock( LzxDecoder* d, unsigned char *out, unsigned long uncomp,
 					const unsigned char *in, unsigned long comp )
 {
 	if( !d || comp > LZX_INPUT_MAX - 4 ) return 0;
+
 	memcpy( d->inBuf, in, (size_t)comp );
 	/* FDI exposes four sentinel bytes past cbData (inputEnd = p + cb + 4) */
 	memset( d->inBuf + comp, 0, 4 );
@@ -696,7 +701,11 @@ int LzxDecodeBlock( LzxDecoder* d, unsigned char *out, unsigned long uncomp,
 	d->eof = 0;
 	/* LZX_Decode() calls initialise_decoder_bitbuf() on entry */
 	if( !lzx_init_bitbuf( d ) ) return 0;
-	return LzxDecode( d, out, uncomp );
+	{
+		int r = LzxDecode( d, out, uncomp );
+
+		return r;
+	}
 }
 
 int LzxDecode( LzxDecoder* d, unsigned char *out, unsigned long len )
