@@ -149,7 +149,7 @@ static int lzx_fillbuf( LzxDecoder *d, int n )
 	if( d->bitcnt <= 0 ) {
 		unsigned int w;
 		int shift;
-		if( d->inPos >= d->inLen ) return 0;
+		if( d->inPos + 2 > d->inLen ) return 0;
 		w = (unsigned int)d->inBuf[d->inPos] |
 		    ((unsigned int)d->inBuf[d->inPos+1] << 8);
 		d->inPos += 2;
@@ -157,9 +157,12 @@ static int lzx_fillbuf( LzxDecoder *d, int n )
 		d->bitbuf |= w << shift;
 		d->bitcnt += 16;
 		if( d->bitcnt <= 0 ) {
-			if( d->inPos >= d->inLen ) return 0;
-			d->bitbuf |= (unsigned int)d->inBuf[d->inPos] << (-d->bitcnt);
-			d->inPos++;
+			/* cabinet.dll takes a second 16-bit word here, not a byte */
+			if( d->inPos + 2 > d->inLen ) return 0;
+			w = (unsigned int)d->inBuf[d->inPos] |
+			    ((unsigned int)d->inBuf[d->inPos+1] << 8);
+			d->inPos += 2;
+			d->bitbuf |= w << (-d->bitcnt);
 			d->bitcnt += 16;
 		}
 	}
@@ -369,7 +372,7 @@ void LzxDestroy( LzxDecoder* d )
 static void lzxIntelUntranslate( LzxDecoder *d, unsigned long frameSize )
 {
 	unsigned char* data = d->frameBuf;
-	unsigned char* dataend = d->frameBuf + frameSize - 6;
+	unsigned char* dataend = d->frameBuf + frameSize - 10;
 	signed int curpos = (signed int)d->offset;
 	signed int filesize = d->intelFilesize;
 	signed int absOff, relOff;
