@@ -60,6 +60,7 @@ typedef struct LzxTree
 {
 	unsigned short	counts[17];
 	unsigned short	symbols[LZX_MAIN_SYMBOLS];
+	unsigned int	fast[1<<16];
 } LzxTree;
 
 typedef struct LzxDecoder
@@ -239,6 +240,28 @@ static int lzxBuildTree( LzxTree *t, const unsigned char *lens, int n )
 	for( i=0; i<n; i++ ) {
 		if( lens[i] ) t->symbols[offset[lens[i]]++] = (unsigned short)i;
 	}
+	/* A 16-bit lookup table turns the bit-at-a-time decode into one
+	   table access per symbol.  The small pre/align trees stay on the
+	   simple decoder; the main and length trees get the table. */
+	if( n>32 ) {
+		int nextcode[17];
+		int symidx = 0;
+		nextcode[1] = 0;
+		for( len=1; len<16; len++ )
+			nextcode[len+1] = (nextcode[len] + t->counts[len]) << 1;
+		memset( t->fast, 0, sizeof(t->fast) );
+		for( len=1; len<=16; len++ ) {
+			int c = nextcode[len], k;
+			for( k=0; k<t->counts[len]; k++ ) {
+				unsigned int first = (unsigned int)c << (16-len);
+				unsigned int span = 1u << (16-len), j;
+				unsigned short sym = t->symbols[symidx++];
+				for( j=0; j<span; j++ )
+					t->fast[first+j] = ((unsigned int)len<<16) | sym;
+				c++;
+			}
+		}
+	}
 	return 1;
 }
 
@@ -262,6 +285,17 @@ static int lzxReadSymbol( LzxDecoder *d, LzxTree *t )
 		code <<= 1;
 	}
 	return -1;
+}
+
+// The bit buffer always holds at least sixteen valid bits at its top, so
+// the whole code can be looked up at once and consumed in one refill.
+static int lzxReadSymbolFast( LzxDecoder *d, LzxTree *t )
+{
+	unsigned int e = t->fast[d->bitbuf >> 16];
+	int len = (int)(e >> 16);
+	if( !len ) return -1;
+	if( !lzx_fillbuf( d, len ) ) return -1;
+	return (int)(e & 0xffffu);
 }
 
 // Read the code lengths of a tree.  The twenty lengths of the pre tree
@@ -576,7 +610,7 @@ static int lzxDecodeFrame( LzxDecoder *d, unsigned long frameSize )
 				unsigned int matchOffset;
 				unsigned int v;
 
-				mainElement = lzxReadSymbol( d, &d->maintree );
+				mainElement = lzxReadSymbolFast( d, &d->maintree );
 				if( mainElement<0 ) return 0;
 				if( mainElement < LZX_NUM_CHARS ) {
 					// a literal
@@ -590,7 +624,7 @@ static int lzxDecodeFrame( LzxDecoder *d, unsigned long frameSize )
 				matchLength = mainElement & LZX_NUM_PRIMARY;
 				if( matchLength==LZX_NUM_PRIMARY ) {
 					if( d->lengthEmpty ) return 0;
-					lengthFooter = lzxReadSymbol( d, &d->lengthtree );
+					lengthFooter = lzxReadSymbolFast( d, &d->lengthtree );
 					if( lengthFooter<0 ) return 0;
 					matchLength += lengthFooter;
 				}
